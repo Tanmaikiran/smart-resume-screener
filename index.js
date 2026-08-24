@@ -25,58 +25,37 @@ const API_KEY = "AQ.Ab8RN6Jeq3OB" + "5XVE-d-YecZ7-vsXs7SN49ZWXOvPxDZIMoxG9g";
 function cleanPdfText(text) {
     let cleanText = text;
     try { cleanText = decodeURIComponent(text); } catch (error) {}
-    return cleanText.replace(/[ \t]+/g, ' ').replace(/\n\s*\n/g, '\n').trim();
+    return cleanText.replace(/[ \t]+/g, ' ').trim();
 }
 
-async function extractResumeDataWithAI(rawText) {
-    const prompt = `Analyze this resume and extract the key information in clean JSON format:
-1. "skills": An array of technical skills, programming languages, libraries, and frameworks mentioned.
-2. "education": A clean, concise summary of the candidate's degree, branch/major, institution, and graduation years. Do NOT include skills or projects here.
-3. "experience": A comprehensive summary of the candidate's work history, internships, and all technical projects built.
+function extractResumeData(text) {
+    const lowerText = text.toLowerCase();
+    const knownSkills = [
+        'javascript', 'java', 'python', 'c', 'c++', 'html', 'css', 
+        'node.js', 'nodejs', 'express', 'react', 'sql', 'mysql', 
+        'mongodb', 'postgresql', 'redis', 'docker', 'kubernetes', 
+        'git', 'github', 'three.js', 'laravel', 'firebase', 'aws', 
+        'azure', 'web3.js', 'jwt', 'oauth', 'rest api', 'api'
+    ];
+    
+    const skills = knownSkills.filter(skill => lowerText.includes(skill.toLowerCase()));
 
-Return ONLY valid JSON matching this exact structure:
-{
-  "skills": ["Skill 1", "Skill 2"],
-  "education": "Degree in Major - University (Years)",
-  "experience": "Detailed summary of all roles, projects, and work experience."
-}
+    let education = "Not clearly identified";
+    let experience = "Not clearly identified";
 
-Resume Text:
-${rawText}`;
-
-    try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${API_KEY}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: {
-                    temperature: 0.1,
-                    maxOutputTokens: 1000
-                }
-            })
-        });
-
-        const data = await response.json();
-        if (response.ok && data.candidates && data.candidates[0]?.content?.parts[0]?.text) {
-            let output = data.candidates[0].content.parts[0].text.trim();
-            output = output.replace(/```json/gi, '').replace(/```/g, '').trim();
-            const parsed = JSON.parse(output);
-            return {
-                skills: Array.isArray(parsed.skills) ? parsed.skills : [],
-                education: parsed.education || 'Not clearly identified',
-                experience: parsed.experience || 'Not clearly identified'
-            };
-        }
-    } catch (err) {
-        console.error("AI extraction error, falling back:", err.message);
+    // Section-Block Parsing: Grabs everything after "Education" until it hits the next major heading
+    const edMatch = text.match(/(?:education|academic background)[^]*?(?=experience|projects|skills|employment|$)/i);
+    if (edMatch) {
+        education = edMatch[0].replace(/(education|academic background)/i, '').substring(0, 250).trim();
     }
 
-    return {
-        skills: ['JavaScript', 'HTML', 'CSS', 'Node.js', 'Express', 'React', 'SQL', 'Git'],
-        education: 'B.Tech in Computer Science Engineering (2023 - 2027)',
-        experience: 'Full-stack & 3D Web Development, Software Engineering Projects'
-    };
+    // Section-Block Parsing: Grabs everything after "Experience" or "Projects" until it hits the next heading
+    const expMatch = text.match(/(?:experience|projects|employment)[^]*?(?=education|skills|$)/i);
+    if (expMatch) {
+        experience = expMatch[0].replace(/(experience|projects|employment)/i, '').substring(0, 400).trim();
+    }
+
+    return { skills, experience, education };
 }
 
 app.post('/upload', upload.single('resume'), (req, res) => {
@@ -91,7 +70,7 @@ app.post('/upload', upload.single('resume'), (req, res) => {
         return res.status(500).json({ error: 'Failed to read the PDF file.' });
     });
 
-    pdfParser.on('pdfParser_dataReady', async () => {
+    pdfParser.on('pdfParser_dataReady', () => {
         let extractedText = pdfParser.getRawTextContent();
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 
@@ -100,7 +79,9 @@ app.post('/upload', upload.single('resume'), (req, res) => {
         }
 
         extractedText = cleanPdfText(extractedText);
-        const resumeData = await extractResumeDataWithAI(extractedText);
+        
+        // Instant local extraction instead of a 35-second AI call
+        const resumeData = extractResumeData(extractedText);
 
         const result = db.prepare(`
             INSERT INTO resumes (file_name, resume_text, skills, experience, education)
@@ -126,52 +107,40 @@ app.post('/score', async (req, res) => {
         return res.status(400).json({ error: 'Resume text and job description are required.' });
     }
 
-    const prompt = `You are a technical recruiter evaluating a candidate resume against a job description.
+    // Streamlined prompt to reduce generation time
+    const prompt = `Evaluate candidate resume against job description.
+Return ONLY this exact text format:
+MATCH SCORE: <number 0-100>
+DECISION: <SHORTLIST/REVIEW/REJECT>
+SKILLS MATCH: <1 sentence>
+EXPERIENCE MATCH: <1 sentence>
+EDUCATION MATCH: <1 sentence>
+JUSTIFICATION: <1 sentence>
 
-SCORING RULE:
-80-100 = SHORTLIST
-60-79 = REVIEW
-0-59 = REJECT
-
-Return ONLY the following exact format:
-MATCH SCORE: <number from 0 to 100>
-DECISION: <SHORTLIST, REVIEW, or REJECT>
-SKILLS MATCH: <one sentence explaining technical skill overlap>
-EXPERIENCE MATCH: <one sentence explaining relevant projects>
-EDUCATION MATCH: <one sentence explaining education relevance>
-JUSTIFICATION: <two sentences summarizing the technical fit>
-
-Candidate Resume:
-${resumeText}
+Resume:
+${resumeText.substring(0, 2500)}
 
 Job Description:
-${jobDescription}`;
+${jobDescription.substring(0, 1000)}`;
 
     try {
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${API_KEY}`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                contents: [{
-                    parts: [{ text: prompt }]
-                }],
+                contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: {
-                    maxOutputTokens: 1000,
-                    temperature: 0.2
+                    maxOutputTokens: 250, // Force a rapid response
+                    temperature: 0.1
                 }
             })
         });
 
         const data = await response.json();
 
-        if (!response.ok) {
-            throw new Error(data.error?.message || "Direct API call failed");
-        }
+        if (!response.ok) throw new Error(data.error?.message || "Direct API call failed");
 
         const matchResult = data.candidates[0].content.parts[0].text;
-        
         const scoreMatch = matchResult.match(/MATCH SCORE:\s*(\d+)/i);
         const decisionMatch = matchResult.match(/DECISION:\s*(SHORTLIST|REVIEW|REJECT)/i);
         
