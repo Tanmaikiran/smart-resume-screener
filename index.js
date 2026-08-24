@@ -28,32 +28,45 @@ function cleanPdfText(text) {
     return cleanText.replace(/\s+/g, ' ').trim();
 }
 
-// 100% Local, API-Free Extraction (Instant & Crash-Proof)
+// 100% Local, Precision-Targeted Extraction
 function extractResumeData(text) {
     const lowerText = text.toLowerCase();
+    
+    // 1. SKILLS
     const knownSkills = [
         'javascript', 'java', 'python', 'c', 'c++', 'html', 'css', 
         'node.js', 'express', 'react', 'sql', 'mysql', 'mongodb', 
         'postgresql', 'redis', 'docker', 'kubernetes', 'git', 'github', 
         'three.js', 'laravel', 'firebase', 'aws', 'jwt', 'oauth'
     ];
-    
     const skills = knownSkills.filter(skill => lowerText.includes(skill.toLowerCase()));
 
-    // Universally strip all URLs and links to prevent two-column bleed
-    const cleanText = text.replace(/https?:\/\/[^\s]+/g, '').replace(/GITHUB LINK|LIVE APP LINK/ig, '');
+    // Clean text to stop URL bleed
+    const cleanText = text.replace(/https?:\/\/[^\s]+/g, '').replace(/GITHUB LINK|LIVE APP LINK/ig, '').replace(/\s+/g, ' ');
 
-    let education = "Education details not clearly identified.";
-    const eduMatch = cleanText.match(/(B\.?Tech|Bachelor|Master|CGPA|University|College|Institute|Institutions)[^]{0,120}/ig);
-    if (eduMatch) {
-        education = eduMatch.slice(0, 2).join(' | ').replace(/\s+/g, ' ').trim();
-    }
+    // 2. EDUCATION: Extracts ONLY Degree, University, Year, and CGPA
+    let eduParts = [];
+    const degree = cleanText.match(/(B\.?Tech(?: in [a-zA-Z\s]+)?|Bachelor(?:'s)?(?: of [a-zA-Z\s]+)?|M\.?Tech|Master(?:'s)?)/i);
+    const university = cleanText.match(/([A-Z][a-zA-Z\s]+(?:University|Institute of Technology|College|Institutions))/);
+    const year = cleanText.match(/(20\d{2}\s*[-–]\s*20\d{2})/);
+    const cgpa = cleanText.match(/(CGPA[\s:]*\d\.\d{1,2})/i);
 
-    let experience = "Experience details not clearly identified.";
-    const expMatch = cleanText.match(/(Developed|Built|Led|Co-founded|W O RK EXPERIENCE|Projects)[^]{0,150}/ig);
-    if (expMatch) {
-        experience = expMatch.slice(0, 2).join(' | ').replace(/\s+/g, ' ').trim();
-    }
+    if (degree) eduParts.push(degree[1].trim());
+    if (university) eduParts.push(university[1].trim());
+    if (year) eduParts.push(year[1].trim());
+    if (cgpa) eduParts.push(cgpa[1].trim());
+    
+    const education = eduParts.length > 0 ? eduParts.join(' | ') : "Education details not clearly identified.";
+
+    // 3. EXPERIENCE: Extracts ONLY Role and Action Sentences
+    let expParts = [];
+    const role = cleanText.match(/(Software Engineer|Developer|Intern|Co-founder|Founder|Student Startup)[^,\.]{0,30}/i);
+    if (role) expParts.push(role[1].trim());
+    
+    const action = cleanText.match(/(Developed|Built|Led|Implemented)[a-zA-Z\s0-9]{10,70}(?:using [a-zA-Z0-9\s]+)?/i);
+    if (action) expParts.push(action[0].trim());
+
+    const experience = expParts.length > 0 ? expParts.join(' | ') : "Experience details not clearly identified.";
 
     return { skills, experience, education };
 }
@@ -79,7 +92,6 @@ app.post('/upload', upload.single('resume'), (req, res) => {
         }
 
         extractedText = cleanPdfText(extractedText);
-        
         const resumeData = extractResumeData(extractedText);
 
         const result = db.prepare(`
