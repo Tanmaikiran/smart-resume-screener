@@ -28,11 +28,12 @@ function cleanPdfText(text) {
     return cleanText.replace(/\s+/g, ' ').trim();
 }
 
-// 100% Local, Precision-Targeted Extraction
+// 100% Universal, Multi-Capture Extraction
 function extractResumeData(text) {
-    const lowerText = text.toLowerCase();
+    const cleanText = text.replace(/https?:\/\/[^\s]+/g, '').replace(/GITHUB LINK|LIVE APP LINK/ig, '').replace(/\s+/g, ' ');
+    const lowerText = cleanText.toLowerCase();
     
-    // 1. SKILLS
+    // 1. SKILLS (Properly spaced)
     const knownSkills = [
         'javascript', 'java', 'python', 'c', 'c++', 'html', 'css', 
         'node.js', 'express', 'react', 'sql', 'mysql', 'mongodb', 
@@ -41,32 +42,21 @@ function extractResumeData(text) {
     ];
     const skills = knownSkills.filter(skill => lowerText.includes(skill.toLowerCase()));
 
-    // Clean text to stop URL bleed
-    const cleanText = text.replace(/https?:\/\/[^\s]+/g, '').replace(/GITHUB LINK|LIVE APP LINK/ig, '').replace(/\s+/g, ' ');
-
-    // 2. EDUCATION: Extracts ONLY Degree, University, Year, and CGPA
-    let eduParts = [];
-    const degree = cleanText.match(/(B\.?Tech(?: in [a-zA-Z\s]+)?|Bachelor(?:'s)?(?: of [a-zA-Z\s]+)?|M\.?Tech|Master(?:'s)?)/i);
-    const university = cleanText.match(/([A-Z][a-zA-Z\s]+(?:University|Institute of Technology|College|Institutions))/);
-    const year = cleanText.match(/(20\d{2}\s*[-–]\s*20\d{2})/);
-    const cgpa = cleanText.match(/(CGPA[\s:]*\d\.\d{1,2})/i);
-
-    if (degree) eduParts.push(degree[1].trim());
-    if (university) eduParts.push(university[1].trim());
-    if (year) eduParts.push(year[1].trim());
-    if (cgpa) eduParts.push(cgpa[1].trim());
+    // 2. EDUCATION - Universally captures ALL degrees and ALL universities found
+    const degrees = cleanText.match(/(B\.?Tech|M\.?Tech|Bachelor|Master|Diploma|Intermediate)/ig) || [];
+    const universities = cleanText.match(/([A-Z][a-zA-Z\s]+(?:University|Institute of Technology|College|Institutions))/g) || [];
     
-    const education = eduParts.length > 0 ? eduParts.join(' | ') : "Education details not clearly identified.";
-
-    // 3. EXPERIENCE: Extracts ONLY Role and Action Sentences
-    let expParts = [];
-    const role = cleanText.match(/(Software Engineer|Developer|Intern|Co-founder|Founder|Student Startup)[^,\.]{0,30}/i);
-    if (role) expParts.push(role[1].trim());
+    const uniqueDegrees = [...new Set(degrees)].join(', ');
+    const uniqueUniversities = [...new Set(universities)].join(', ');
     
-    const action = cleanText.match(/(Developed|Built|Led|Implemented)[a-zA-Z\s0-9]{10,70}(?:using [a-zA-Z0-9\s]+)?/i);
-    if (action) expParts.push(action[0].trim());
+    let education = "Education details not clearly identified.";
+    if (uniqueDegrees || uniqueUniversities) {
+        education = `${uniqueDegrees} | ${uniqueUniversities}`.replace(/^ \| | \| $/g, '');
+    }
 
-    const experience = expParts.length > 0 ? expParts.join(' | ') : "Experience details not clearly identified.";
+    // 3. EXPERIENCE - Universally captures action sentences
+    const actionVerbs = cleanText.match(/(?:Developed|Built|Led|Implemented|Co-founded)[^.]{20,100}/ig) || [];
+    const experience = actionVerbs.length > 0 ? actionVerbs.slice(0, 3).join(' | ') : "Experience details not clearly identified.";
 
     return { skills, experience, education };
 }
@@ -102,7 +92,7 @@ app.post('/upload', upload.single('resume'), (req, res) => {
         return res.json({
             resumeId: result.lastInsertRowid,
             text: extractedText,
-            skills: resumeData.skills,
+            skills: resumeData.skills, // Now an array, UI will handle spacing
             experience: resumeData.experience,
             education: resumeData.education
         });
@@ -118,14 +108,17 @@ app.post('/score', async (req, res) => {
         return res.status(400).json({ error: 'Resume text and job description are required.' });
     }
 
-    const prompt = `Act as an expert recruiter. Compare the resume to the job description.
-Return EXACTLY this text format, with no markdown, asterisks, or extra spaces:
-MATCH SCORE: [Number 0-100]
-DECISION: [SHORTLIST, REVIEW, or REJECT]
-SKILLS MATCH: [1 sentence]
-EXPERIENCE MATCH: [1 sentence]
-EDUCATION MATCH: [1 sentence]
-JUSTIFICATION: [1 sentence]
+    // Strict JSON Prompt to prevent UI formatting breaks
+    const prompt = `Evaluate candidate resume against job description.
+Return ONLY a valid JSON object. Do not include markdown formatting or any conversational text.
+{
+    "matchScore": <number 0-100>,
+    "decision": "<SHORTLIST, REVIEW, or REJECT>",
+    "skillsMatch": "<1 sentence string>",
+    "experienceMatch": "<1 sentence string>",
+    "educationMatch": "<1 sentence string>",
+    "justification": "<1 sentence string>"
+}
 
 Resume:
 ${resumeText.substring(0, 3000)}
@@ -140,7 +133,7 @@ ${jobDescription}`;
             body: JSON.stringify({
                 contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: {
-                    maxOutputTokens: 250,
+                    maxOutputTokens: 300,
                     temperature: 0.1
                 }
             })
@@ -150,12 +143,15 @@ ${jobDescription}`;
 
         if (!response.ok) throw new Error(data.error?.message || "Direct API call failed");
 
-        const matchResult = data.candidates[0].content.parts[0].text;
-        const scoreMatch = matchResult.match(/MATCH SCORE:\s*(\d+)/i);
-        const decisionMatch = matchResult.match(/DECISION:\s*(SHORTLIST|REVIEW|REJECT)/i);
+        let rawOutput = data.candidates[0].content.parts[0].text.trim();
+        rawOutput = rawOutput.replace(/```json/i, '').replace(/```/g, '').trim();
         
-        const matchScore = scoreMatch ? parseInt(scoreMatch[1]) : 0;
-        const decision = decisionMatch ? decisionMatch[1].toUpperCase() : 'REVIEW';
+        const parsedData = JSON.parse(rawOutput);
+        
+        const matchScore = parsedData.matchScore || 0;
+        const decision = parsedData.decision ? parsedData.decision.toUpperCase() : 'REVIEW';
+        
+        const matchResult = `SKILLS MATCH: ${parsedData.skillsMatch}\nEXPERIENCE MATCH: ${parsedData.experienceMatch}\nEDUCATION MATCH: ${parsedData.educationMatch}\nJUSTIFICATION: ${parsedData.justification}`;
 
         if (resumeId) {
             db.prepare(`
@@ -166,7 +162,7 @@ ${jobDescription}`;
 
         return res.json({ matchScore, decision, matchResult });
     } catch (error) {
-        return res.status(500).json({ error: 'API Error: ' + error.message });
+        return res.status(500).json({ error: 'API Error: Failed to generate or parse response.' });
     }
 });
 
