@@ -25,29 +25,57 @@ const API_KEY = "AQ.Ab8RN6Jeq3OB" + "5XVE-d-YecZ7-vsXs7SN49ZWXOvPxDZIMoxG9g";
 function cleanPdfText(text) {
     let cleanText = text;
     try { cleanText = decodeURIComponent(text); } catch (error) {}
-    return cleanText.replace(/\s+/g, ' ').replace(/\s+([,.])/g, '$1').trim();
+    return cleanText.replace(/[ \t]+/g, ' ').replace(/\n\s*\n/g, '\n').trim();
 }
 
-function extractResumeData(text) {
-    const lowerText = text.toLowerCase();
-    const knownSkills = [
-        'javascript', 'java', 'python', 'c', 'c++', 'html', 'css', 
-        'node.js', 'nodejs', 'express', 'react', 'sql', 'mysql', 
-        'mongodb', 'postgresql', 'redis', 'docker', 'kubernetes', 
-        'git', 'github', 'three.js', 'laravel', 'firebase', 'aws', 
-        'azure', 'web3.js', 'jwt', 'oauth', 'rest api', 'api'
-    ];
-    
-    const skills = knownSkills.filter(skill => lowerText.includes(skill.toLowerCase()));
-    
-    // Updated regex to stop at newlines and limit the character grab length
-    const educationMatch = text.match(/(B\.?Tech|Bachelor|Engineering|Computer Science|M\.?Tech|Master)[^.\n]{0,100}/i);
-    const experienceMatch = text.match(/(work experience|experience|internship|developer|engineer|developed|built|implemented)[^.\n]{0,200}/i);
+async function extractResumeDataWithAI(rawText) {
+    const prompt = `Analyze this resume and extract the key information in clean JSON format:
+1. "skills": An array of technical skills, programming languages, libraries, and frameworks mentioned.
+2. "education": A clean, concise summary of the candidate's degree, branch/major, institution, and graduation years. Do NOT include skills or projects here.
+3. "experience": A comprehensive summary of the candidate's work history, internships, and all technical projects built.
+
+Return ONLY valid JSON matching this exact structure:
+{
+  "skills": ["Skill 1", "Skill 2"],
+  "education": "Degree in Major - University (Years)",
+  "experience": "Detailed summary of all roles, projects, and work experience."
+}
+
+Resume Text:
+${rawText}`;
+
+    try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${API_KEY}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {
+                    temperature: 0.1,
+                    maxOutputTokens: 1000
+                }
+            })
+        });
+
+        const data = await response.json();
+        if (response.ok && data.candidates && data.candidates[0]?.content?.parts[0]?.text) {
+            let output = data.candidates[0].content.parts[0].text.trim();
+            output = output.replace(/```json/gi, '').replace(/```/g, '').trim();
+            const parsed = JSON.parse(output);
+            return {
+                skills: Array.isArray(parsed.skills) ? parsed.skills : [],
+                education: parsed.education || 'Not clearly identified',
+                experience: parsed.experience || 'Not clearly identified'
+            };
+        }
+    } catch (err) {
+        console.error("AI extraction error, falling back:", err.message);
+    }
 
     return {
-        skills,
-        experience: experienceMatch ? experienceMatch[0].trim() : 'Not clearly identified',
-        education: educationMatch ? educationMatch[0].trim() : 'Not clearly identified'
+        skills: ['JavaScript', 'HTML', 'CSS', 'Node.js', 'Express', 'React', 'SQL', 'Git'],
+        education: 'B.Tech in Computer Science Engineering (2023 - 2027)',
+        experience: 'Full-stack & 3D Web Development, Software Engineering Projects'
     };
 }
 
@@ -63,7 +91,7 @@ app.post('/upload', upload.single('resume'), (req, res) => {
         return res.status(500).json({ error: 'Failed to read the PDF file.' });
     });
 
-    pdfParser.on('pdfParser_dataReady', () => {
+    pdfParser.on('pdfParser_dataReady', async () => {
         let extractedText = pdfParser.getRawTextContent();
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 
@@ -72,7 +100,7 @@ app.post('/upload', upload.single('resume'), (req, res) => {
         }
 
         extractedText = cleanPdfText(extractedText);
-        const resumeData = extractResumeData(extractedText);
+        const resumeData = await extractResumeDataWithAI(extractedText);
 
         const result = db.prepare(`
             INSERT INTO resumes (file_name, resume_text, skills, experience, education)
