@@ -25,37 +25,45 @@ const API_KEY = "AQ.Ab8RN6Jeq3OB" + "5XVE-d-YecZ7-vsXs7SN49ZWXOvPxDZIMoxG9g";
 function cleanPdfText(text) {
     let cleanText = text;
     try { cleanText = decodeURIComponent(text); } catch (error) {}
-    return cleanText.replace(/[ \t]+/g, ' ').trim();
+    return cleanText.replace(/[ \t]+/g, ' ').replace(/\n\s*\n/g, '\n').trim();
 }
 
-function extractResumeData(text) {
-    const lowerText = text.toLowerCase();
-    const knownSkills = [
-        'javascript', 'java', 'python', 'c', 'c++', 'html', 'css', 
-        'node.js', 'nodejs', 'express', 'react', 'sql', 'mysql', 
-        'mongodb', 'postgresql', 'redis', 'docker', 'kubernetes', 
-        'git', 'github', 'three.js', 'laravel', 'firebase', 'aws', 
-        'azure', 'web3.js', 'jwt', 'oauth', 'rest api', 'api'
-    ];
-    
-    const skills = knownSkills.filter(skill => lowerText.includes(skill.toLowerCase()));
+async function extractResumeDataWithAI(rawText) {
+    const prompt = `Extract data from this resume text. Fix any formatting issues caused by column layouts.
+Return EXACTLY this JSON structure and nothing else:
+{"skills":["skill1","skill2"],"education":"Clean summary of degrees and universities","experience":"Clean summary of work and projects"}
 
-    let education = "Not clearly identified";
-    let experience = "Not clearly identified";
+Resume Text:
+${rawText.substring(0, 3000)}`;
 
-    // Section-Block Parsing: Grabs everything after "Education" until it hits the next major heading
-    const edMatch = text.match(/(?:education|academic background)[^]*?(?=experience|projects|skills|employment|$)/i);
-    if (edMatch) {
-        education = edMatch[0].replace(/(education|academic background)/i, '').substring(0, 250).trim();
+    try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {
+                    temperature: 0.0, // Zero creativity = max speed and precision
+                    maxOutputTokens: 300, // Forces a short, fast response
+                    responseMimeType: "application/json" // Forces strict JSON output
+                }
+            })
+        });
+
+        const data = await response.json();
+        if (response.ok && data.candidates && data.candidates[0]?.content?.parts[0]?.text) {
+            const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
+            return {
+                skills: Array.isArray(parsed.skills) ? parsed.skills : [],
+                education: parsed.education || 'Not clearly identified',
+                experience: parsed.experience || 'Not clearly identified'
+            };
+        }
+    } catch (err) {
+        console.error("AI extraction error:", err.message);
     }
 
-    // Section-Block Parsing: Grabs everything after "Experience" or "Projects" until it hits the next heading
-    const expMatch = text.match(/(?:experience|projects|employment)[^]*?(?=education|skills|$)/i);
-    if (expMatch) {
-        experience = expMatch[0].replace(/(experience|projects|employment)/i, '').substring(0, 400).trim();
-    }
-
-    return { skills, experience, education };
+    return { skills: [], education: 'Extraction failed.', experience: 'Extraction failed.' };
 }
 
 app.post('/upload', upload.single('resume'), (req, res) => {
@@ -70,18 +78,16 @@ app.post('/upload', upload.single('resume'), (req, res) => {
         return res.status(500).json({ error: 'Failed to read the PDF file.' });
     });
 
-    pdfParser.on('pdfParser_dataReady', () => {
+    pdfParser.on('pdfParser_dataReady', async () => {
         let extractedText = pdfParser.getRawTextContent();
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 
         if (!extractedText || extractedText.trim() === '') {
-            return res.status(400).json({ error: 'No readable text was found in the resume.' });
+            return res.status(400).json({ error: 'No readable text was found.' });
         }
 
         extractedText = cleanPdfText(extractedText);
-        
-        // Instant local extraction instead of a 35-second AI call
-        const resumeData = extractResumeData(extractedText);
+        const resumeData = await extractResumeDataWithAI(extractedText);
 
         const result = db.prepare(`
             INSERT INTO resumes (file_name, resume_text, skills, experience, education)
@@ -107,30 +113,29 @@ app.post('/score', async (req, res) => {
         return res.status(400).json({ error: 'Resume text and job description are required.' });
     }
 
-    // Streamlined prompt to reduce generation time
-    const prompt = `Evaluate candidate resume against job description.
-Return ONLY this exact text format:
-MATCH SCORE: <number 0-100>
-DECISION: <SHORTLIST/REVIEW/REJECT>
-SKILLS MATCH: <1 sentence>
-EXPERIENCE MATCH: <1 sentence>
-EDUCATION MATCH: <1 sentence>
-JUSTIFICATION: <1 sentence>
+    const prompt = `Act as an expert recruiter. Compare the resume to the job description.
+Return EXACTLY this text format, with no markdown, asterisks, or extra spaces:
+MATCH SCORE: [Number 0-100]
+DECISION: [SHORTLIST, REVIEW, or REJECT]
+SKILLS MATCH: [1 sentence]
+EXPERIENCE MATCH: [1 sentence]
+EDUCATION MATCH: [1 sentence]
+JUSTIFICATION: [1 sentence]
 
 Resume:
-${resumeText.substring(0, 2500)}
+${resumeText.substring(0, 3000)}
 
 Job Description:
-${jobDescription.substring(0, 1000)}`;
+${jobDescription}`;
 
     try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${API_KEY}`, {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: {
-                    maxOutputTokens: 250, // Force a rapid response
+                    maxOutputTokens: 250,
                     temperature: 0.1
                 }
             })
