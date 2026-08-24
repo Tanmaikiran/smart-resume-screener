@@ -7,7 +7,7 @@ const path = require('path');
 const db = require('./database');
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = 3001; 
 const uploadFolder = path.join(__dirname, 'uploads');
 
 if (!fs.existsSync(uploadFolder)) {
@@ -28,35 +28,27 @@ function cleanPdfText(text) {
     return cleanText.replace(/\s+/g, ' ').trim();
 }
 
-// 100% Universal, Multi-Capture Extraction
 function extractResumeData(text) {
-    const cleanText = text.replace(/https?:\/\/[^\s]+/g, '').replace(/GITHUB LINK|LIVE APP LINK/ig, '').replace(/\s+/g, ' ');
+    const cleanText = text.replace(/https?:\/\/[^\s]+/g, '').replace(/\s+/g, ' ');
     const lowerText = cleanText.toLowerCase();
     
-    // 1. SKILLS (Fixed spacing)
     const knownSkills = [
         'javascript', 'java', 'python', 'c', 'c++', 'html', 'css', 
         'node.js', 'express', 'react', 'sql', 'mysql', 'mongodb', 
         'postgresql', 'redis', 'docker', 'kubernetes', 'git', 'github', 
         'three.js', 'laravel', 'firebase', 'aws', 'jwt', 'oauth'
     ];
-    const skillsArray = knownSkills.filter(skill => lowerText.includes(skill.toLowerCase()));
-    const skills = skillsArray.join(', '); // Commas added to prevent smushing
+    const skills = knownSkills.filter(skill => lowerText.includes(skill.toLowerCase())).join(', ');
 
-    // 2. EDUCATION - Removed 'Diploma' entirely
-    const degrees = cleanText.match(/(B\.?Tech|M\.?Tech|Bachelor|Master|Intermediate)/ig) || [];
-    const universities = cleanText.match(/([A-Z][a-zA-Z\s]+(?:University|Institute of Technology|College|Institutions))/g) || [];
-    
-    const uniqueDegrees = [...new Set(degrees)].join(', ');
-    const uniqueUniversities = [...new Set(universities)].join(', ');
+    const degrees = cleanText.match(/(B\.?Tech|M\.?Tech|Bachelor|Master|B\.?Sc)/ig) || [];
+    const universities = cleanText.match(/([A-Z][a-zA-Z\s]+(?:University|Institute|College))/g) || [];
     
     let education = "Education details not clearly identified.";
-    if (uniqueDegrees || uniqueUniversities) {
-        education = `${uniqueDegrees} | ${uniqueUniversities}`.replace(/^ \| | \| $/g, '');
+    if (degrees.length > 0 || universities.length > 0) {
+        education = `${[...new Set(degrees)].join(', ')} | ${[...new Set(universities)].join(', ')}`;
     }
 
-    // 3. EXPERIENCE 
-    const actionVerbs = cleanText.match(/(?:Developed|Built|Led|Implemented|Co-founded)[^.]{20,100}/ig) || [];
+    const actionVerbs = cleanText.match(/(?:Developed|Built|Led|Implemented|Co-founded)[^.]{20,120}/ig) || [];
     const experience = actionVerbs.length > 0 ? actionVerbs.slice(0, 3).join(' | ') : "Experience details not clearly identified.";
 
     return { skills, experience, education };
@@ -109,15 +101,14 @@ app.post('/score', async (req, res) => {
         return res.status(400).json({ error: 'Resume text and job description are required.' });
     }
 
-    // Crash-proof text prompt
-    const prompt = `Evaluate candidate resume against job description.
-Return EXACTLY this format. NO extra words, NO markdown, NO asterisks.
+    const prompt = `You are an expert technical recruiter. Compare the candidate's resume to the job description.
+Return EXACTLY this text format. NO markdown, NO extra characters.
 MATCH SCORE: <number 0-100>
 DECISION: <SHORTLIST, REVIEW, or REJECT>
-SKILLS MATCH: <1 short sentence>
-EXPERIENCE MATCH: <1 short sentence>
-EDUCATION MATCH: <1 short sentence>
-JUSTIFICATION: <1 short sentence>
+SKILLS MATCH: <Detailed sentence explaining the skill overlap>
+EXPERIENCE MATCH: <Detailed sentence explaining relevant experience>
+EDUCATION MATCH: <Detailed sentence explaining educational alignment>
+JUSTIFICATION: <Detailed sentence summarizing the final decision>
 
 Resume:
 ${resumeText.substring(0, 3000)}
@@ -132,8 +123,8 @@ ${jobDescription}`;
             body: JSON.stringify({
                 contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: {
-                    maxOutputTokens: 300,
-                    temperature: 0.1
+                    maxOutputTokens: 400,
+                    temperature: 0.2
                 }
             })
         });
@@ -161,7 +152,7 @@ ${jobDescription}`;
 
         return res.json({ matchScore, decision, matchResult });
     } catch (error) {
-        return res.status(500).json({ error: 'API Error: Failed to generate or parse response.' });
+        return res.status(500).json({ error: 'API Error: Failed to generate response.' });
     }
 });
 
