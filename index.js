@@ -40,16 +40,17 @@ function extractResumeData(text) {
     
     const skills = knownSkills.filter(skill => lowerText.includes(skill.toLowerCase()));
 
+    // Universally strip all URLs and links to prevent two-column bleed
+    const cleanText = text.replace(/https?:\/\/[^\s]+/g, '').replace(/GITHUB LINK|LIVE APP LINK/ig, '');
+
     let education = "Education details not clearly identified.";
-    // Scans the jumbled text for university/degree keywords and grabs the surrounding text
-    const eduMatch = text.match(/(B\.?Tech|Bachelor|CGPA|Vellore Institute|University|College|Institutions)[^]{0,150}/ig);
+    const eduMatch = cleanText.match(/(B\.?Tech|Bachelor|Master|CGPA|University|College|Institute|Institutions)[^]{0,120}/ig);
     if (eduMatch) {
         education = eduMatch.slice(0, 2).join(' | ').replace(/\s+/g, ' ').trim();
     }
 
     let experience = "Experience details not clearly identified.";
-    // Scans for action verbs and project keywords
-    const expMatch = text.match(/(Developed|Built|Led|Co-founded|W O RK EXPERIENCE|Projects)[^]{0,200}/ig);
+    const expMatch = cleanText.match(/(Developed|Built|Led|Co-founded|W O RK EXPERIENCE|Projects)[^]{0,150}/ig);
     if (expMatch) {
         experience = expMatch.slice(0, 2).join(' | ').replace(/\s+/g, ' ').trim();
     }
