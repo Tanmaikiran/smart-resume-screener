@@ -33,17 +33,18 @@ function extractResumeData(text) {
     const cleanText = text.replace(/https?:\/\/[^\s]+/g, '').replace(/GITHUB LINK|LIVE APP LINK/ig, '').replace(/\s+/g, ' ');
     const lowerText = cleanText.toLowerCase();
     
-    // 1. SKILLS (Properly spaced)
+    // 1. SKILLS (Fixed spacing)
     const knownSkills = [
         'javascript', 'java', 'python', 'c', 'c++', 'html', 'css', 
         'node.js', 'express', 'react', 'sql', 'mysql', 'mongodb', 
         'postgresql', 'redis', 'docker', 'kubernetes', 'git', 'github', 
         'three.js', 'laravel', 'firebase', 'aws', 'jwt', 'oauth'
     ];
-    const skills = knownSkills.filter(skill => lowerText.includes(skill.toLowerCase()));
+    const skillsArray = knownSkills.filter(skill => lowerText.includes(skill.toLowerCase()));
+    const skills = skillsArray.join(', '); // Commas added to prevent smushing
 
-    // 2. EDUCATION - Universally captures ALL degrees and ALL universities found
-    const degrees = cleanText.match(/(B\.?Tech|M\.?Tech|Bachelor|Master|Diploma|Intermediate)/ig) || [];
+    // 2. EDUCATION - Removed 'Diploma' entirely
+    const degrees = cleanText.match(/(B\.?Tech|M\.?Tech|Bachelor|Master|Intermediate)/ig) || [];
     const universities = cleanText.match(/([A-Z][a-zA-Z\s]+(?:University|Institute of Technology|College|Institutions))/g) || [];
     
     const uniqueDegrees = [...new Set(degrees)].join(', ');
@@ -54,7 +55,7 @@ function extractResumeData(text) {
         education = `${uniqueDegrees} | ${uniqueUniversities}`.replace(/^ \| | \| $/g, '');
     }
 
-    // 3. EXPERIENCE - Universally captures action sentences
+    // 3. EXPERIENCE 
     const actionVerbs = cleanText.match(/(?:Developed|Built|Led|Implemented|Co-founded)[^.]{20,100}/ig) || [];
     const experience = actionVerbs.length > 0 ? actionVerbs.slice(0, 3).join(' | ') : "Experience details not clearly identified.";
 
@@ -87,12 +88,12 @@ app.post('/upload', upload.single('resume'), (req, res) => {
         const result = db.prepare(`
             INSERT INTO resumes (file_name, resume_text, skills, experience, education)
             VALUES (?, ?, ?, ?, ?)
-        `).run(originalName, extractedText, JSON.stringify(resumeData.skills), resumeData.experience, resumeData.education);
+        `).run(originalName, extractedText, resumeData.skills, resumeData.experience, resumeData.education);
 
         return res.json({
             resumeId: result.lastInsertRowid,
             text: extractedText,
-            skills: resumeData.skills, // Now an array, UI will handle spacing
+            skills: resumeData.skills,
             experience: resumeData.experience,
             education: resumeData.education
         });
@@ -108,17 +109,15 @@ app.post('/score', async (req, res) => {
         return res.status(400).json({ error: 'Resume text and job description are required.' });
     }
 
-    // Strict JSON Prompt to prevent UI formatting breaks
+    // Crash-proof text prompt
     const prompt = `Evaluate candidate resume against job description.
-Return ONLY a valid JSON object. Do not include markdown formatting or any conversational text.
-{
-    "matchScore": <number 0-100>,
-    "decision": "<SHORTLIST, REVIEW, or REJECT>",
-    "skillsMatch": "<1 sentence string>",
-    "experienceMatch": "<1 sentence string>",
-    "educationMatch": "<1 sentence string>",
-    "justification": "<1 sentence string>"
-}
+Return EXACTLY this format. NO extra words, NO markdown, NO asterisks.
+MATCH SCORE: <number 0-100>
+DECISION: <SHORTLIST, REVIEW, or REJECT>
+SKILLS MATCH: <1 short sentence>
+EXPERIENCE MATCH: <1 short sentence>
+EDUCATION MATCH: <1 short sentence>
+JUSTIFICATION: <1 short sentence>
 
 Resume:
 ${resumeText.substring(0, 3000)}
@@ -143,15 +142,15 @@ ${jobDescription}`;
 
         if (!response.ok) throw new Error(data.error?.message || "Direct API call failed");
 
-        let rawOutput = data.candidates[0].content.parts[0].text.trim();
-        rawOutput = rawOutput.replace(/```json/i, '').replace(/```/g, '').trim();
+        const textOutput = data.candidates[0].content.parts[0].text;
         
-        const parsedData = JSON.parse(rawOutput);
+        const scoreMatch = textOutput.match(/MATCH SCORE:\s*(\d+)/i);
+        const decisionMatch = textOutput.match(/DECISION:\s*(SHORTLIST|REVIEW|REJECT)/i);
         
-        const matchScore = parsedData.matchScore || 0;
-        const decision = parsedData.decision ? parsedData.decision.toUpperCase() : 'REVIEW';
+        const matchScore = scoreMatch ? parseInt(scoreMatch[1]) : 0;
+        const decision = decisionMatch ? decisionMatch[1].toUpperCase() : 'REVIEW';
         
-        const matchResult = `SKILLS MATCH: ${parsedData.skillsMatch}\nEXPERIENCE MATCH: ${parsedData.experienceMatch}\nEDUCATION MATCH: ${parsedData.educationMatch}\nJUSTIFICATION: ${parsedData.justification}`;
+        const matchResult = textOutput.replace(/MATCH SCORE:.*\n/i, '').replace(/DECISION:.*\n/i, '').trim();
 
         if (resumeId) {
             db.prepare(`
