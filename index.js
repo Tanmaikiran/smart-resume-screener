@@ -7,7 +7,7 @@ const path = require('path');
 const db = require('./database');
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 const uploadFolder = path.join(__dirname, 'uploads');
 
 if (!fs.existsSync(uploadFolder)) {
@@ -20,7 +20,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 
-// Split key to bypass GitHub secret scanning while keeping it fully functional
 const API_KEY = "AQ.Ab8RN6Jeq3OB" + "5XVE-d-YecZ7-vsXs7SN49ZWXOvPxDZIMoxG9g";
 
 function cleanPdfText(text) {
@@ -40,13 +39,15 @@ function extractResumeData(text) {
     ];
     
     const skills = knownSkills.filter(skill => lowerText.includes(skill.toLowerCase()));
-    const educationMatch = text.match(/(B\.?Tech|Bachelor|Engineering|Computer Science|M\.?Tech|Master)[^.]{0,180}/i);
-    const experienceMatch = text.match(/(work experience|experience|internship|developer|engineer|developed|built|implemented)[^.]{0,300}/i);
+    
+    // Updated regex to stop at newlines and limit the character grab length
+    const educationMatch = text.match(/(B\.?Tech|Bachelor|Engineering|Computer Science|M\.?Tech|Master)[^.\n]{0,100}/i);
+    const experienceMatch = text.match(/(work experience|experience|internship|developer|engineer|developed|built|implemented)[^.\n]{0,200}/i);
 
     return {
         skills,
-        experience: experienceMatch ? experienceMatch[0] : 'Not clearly identified',
-        education: educationMatch ? educationMatch[0] : 'Not clearly identified'
+        experience: experienceMatch ? experienceMatch[0].trim() : 'Not clearly identified',
+        education: educationMatch ? educationMatch[0].trim() : 'Not clearly identified'
     };
 }
 
