@@ -30,11 +30,16 @@ function cleanPdfText(text) {
 
 async function extractResumeDataWithAI(rawText) {
     const prompt = `Extract data from this resume text. Fix any formatting issues caused by column layouts.
-Return EXACTLY this JSON structure and nothing else:
-{"skills":["skill1","skill2"],"education":"Clean summary of degrees and universities","experience":"Clean summary of work and projects"}
+Return EXACTLY this plain text format and nothing else:
+[SKILLS]
+skill 1, skill 2
+[EDUCATION]
+Clean summary of degrees and universities
+[EXPERIENCE]
+Clean summary of work and projects
 
 Resume Text:
-${rawText.substring(0, 3000)}`;
+${rawText.substring(0, 3500)}`;
 
     try {
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`, {
@@ -43,20 +48,24 @@ ${rawText.substring(0, 3000)}`;
             body: JSON.stringify({
                 contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: {
-                    temperature: 0.0, // Zero creativity = max speed and precision
-                    maxOutputTokens: 300, // Forces a short, fast response
-                    responseMimeType: "application/json" // Forces strict JSON output
+                    temperature: 0.1, 
+                    maxOutputTokens: 800 
                 }
             })
         });
 
         const data = await response.json();
         if (response.ok && data.candidates && data.candidates[0]?.content?.parts[0]?.text) {
-            const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
+            const text = data.candidates[0].content.parts[0].text;
+            
+            const skillsMatch = text.match(/\[SKILLS\]([\s\S]*?)\[EDUCATION\]/i);
+            const eduMatch = text.match(/\[EDUCATION\]([\s\S]*?)\[EXPERIENCE\]/i);
+            const expMatch = text.match(/\[EXPERIENCE\]([\s\S]*)$/i);
+
             return {
-                skills: Array.isArray(parsed.skills) ? parsed.skills : [],
-                education: parsed.education || 'Not clearly identified',
-                experience: parsed.experience || 'Not clearly identified'
+                skills: skillsMatch ? skillsMatch[1].trim().split(',').map(s => s.trim()) : [],
+                education: eduMatch ? eduMatch[1].trim() : 'Not clearly identified',
+                experience: expMatch ? expMatch[1].trim() : 'Not clearly identified'
             };
         }
     } catch (err) {
@@ -123,7 +132,7 @@ EDUCATION MATCH: [1 sentence]
 JUSTIFICATION: [1 sentence]
 
 Resume:
-${resumeText.substring(0, 3000)}
+${resumeText.substring(0, 3500)}
 
 Job Description:
 ${jobDescription}`;
@@ -135,7 +144,7 @@ ${jobDescription}`;
             body: JSON.stringify({
                 contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: {
-                    maxOutputTokens: 250,
+                    maxOutputTokens: 300,
                     temperature: 0.1
                 }
             })
